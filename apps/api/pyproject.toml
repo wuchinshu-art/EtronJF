@@ -1,0 +1,26 @@
+[project]
+name = "etronjf8-api"
+version = "0.1.0"
+description = "ETJ EtronJF8 Management System API"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "fastapi==0.156.8",
+    "uvicorn>=0.34.0",
+    "sqlalchemy==2.0.44",
+    "alembic==1.17.2",
+    "pydantic==2.12.5",
+    "pydantic-settings>=2.7.0",
+    "argon2-cffi>=25.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.25.0",
+    "httpx>=0.28.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+pythonpath = ["."]

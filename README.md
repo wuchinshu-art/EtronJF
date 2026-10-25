@@ -2389,3 +2389,4 @@
   3. **後端 API 伺服器端授權 (Backend Server-side Authorization)**：後端依據 RBAC 機制確認其具備 ADMIN 身分，全量開放全公司範圍之業務查詢、表單提交、核准駁回及系統參數設定端點。
 - **驗證方式 (Verification)**：
   - 經由 ORM 檢索驗證 UserRole 表，確認角色陣列已正確寫入 ['ADMIN', 'HR_ADMIN']。
+# EtronJF

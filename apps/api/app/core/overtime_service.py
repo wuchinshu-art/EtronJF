@@ -174,20 +174,19 @@ class OvertimeService:
 
             # 補休入帳連動
             if ot_req.compensation_type == "COMPENSATORY_LEAVE" and ot_req.comp_leave_minutes > 0:
-                # 尋找該公司的補休假別 (COMPENSATORY 或 COMP)
+                # 尋找全域補休假別 (COMPENSATORY 或 COMP，不分公司)
                 comp_leave_type = (
                     db.query(LeaveType)
                     .filter(
-                        LeaveType.company_id == ot_req.company_id,
                         LeaveType.code.in_(["COMPENSATORY", "COMP", "COMP_LEAVE"]),
                     )
                     .first()
                 )
                 if not comp_leave_type:
-                    # 自動確保存在補休假別
+                    # 自動確保存在全域補休假別
                     comp_leave_type = LeaveType(
-                        id=f"lt-comp-{ot_req.company_id}",
-                        company_id=ot_req.company_id,
+                        id="LT-COMPENSATORY",
+                        company_id=None,
                         code="COMPENSATORY",
                         name="補休",
                         unit="MINUTES",

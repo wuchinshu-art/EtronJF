@@ -67,7 +67,7 @@ const grantError = ref('');
 
 async function fetchLeaveTypes() {
   try {
-    const res = await fetch(`/api/v1/hr/leave-types?company_id=${props.companyId}`);
+    const res = await fetch('/api/v1/hr/leave-types');
     if (res.ok) {
       leaveTypes.value = await res.json();
       if (leaveTypes.value.length > 0 && !grantLeaveTypeId.value) {

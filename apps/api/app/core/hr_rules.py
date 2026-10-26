@@ -613,8 +613,9 @@ class LeaveLedgerService:
         if not emp:
             raise AppException(code="EMPLOYEE_NOT_FOUND", message="找不到指定員工", status_code=404)
 
+        # 假別為全域共用主檔（不分公司）
         leave_types = db.execute(
-            select(LeaveType).where(LeaveType.company_id == emp.company_id)
+            select(LeaveType).order_by(LeaveType.code)
         ).scalars().all()
 
         today = as_of_date or date.today()
@@ -733,10 +734,9 @@ class LeaveEntitlementService:
         comp = db.get(Company, company_id)
         country = "JP" if comp and ("JP" in comp.id.upper() or "TOKYO" in (comp.default_timezone or "").upper()) else "TW"
 
-        # 找出特別休假 leave_type
+        # 找出特別休假 leave_type（全域共用不分公司）
         annual_lt = db.execute(
             select(LeaveType).where(
-                LeaveType.company_id == company_id,
                 LeaveType.code.in_(["ANNUAL", "SPECIAL", "ANNUAL_LEAVE"]),
             )
         ).scalars().first()

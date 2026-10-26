@@ -41,10 +41,9 @@ class LeaveService:
         if not leave_type:
             leave_type = db.execute(
                 select(LeaveType).where(
-                    LeaveType.company_id == employee.company_id,
-                    (LeaveType.code == leave_type_id) | (LeaveType.name == leave_type_id),
+                    (LeaveType.code == leave_type_id.upper()) | (LeaveType.name == leave_type_id),
                 )
-            ).scalar_one_or_none()
+            ).scalars().first()
         if not leave_type:
             standard_names = {
                 "ANNUAL": "特別休假",
@@ -62,8 +61,8 @@ class LeaveService:
             code = leave_type_id.upper()
             name = standard_names.get(code, leave_type_id)
             leave_type = LeaveType(
-                id=f"LT-{code}-{employee.company_id}",
-                company_id=employee.company_id,
+                id=f"LT-{code}",
+                company_id=None,
                 code=code,
                 name=name,
                 unit="MINUTES",

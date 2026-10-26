@@ -70,7 +70,7 @@ const typeError = ref('');
 async function fetchLeaveTypes() {
   isLoadingTypes.value = true;
   try {
-    const res = await apiFetch(`/api/v1/hr/leave-types?company_id=${props.companyId}`);
+    const res = await apiFetch('/api/v1/hr/leave-types');
     if (res.ok) {
       leaveTypes.value = await res.json();
     }
@@ -85,7 +85,7 @@ function openCreateType() {
   isEditingType.value = false;
   typeError.value = '';
   typeForm.value = {
-    id: `LT-${props.companyId}-${Date.now().toString(36).toUpperCase()}`,
+    id: '',
     code: '',
     name: '',
     unit: 'HALF_HOUR',
@@ -110,6 +110,21 @@ function openEditType(item: LeaveTypeItem) {
     requires_attachment: item.requires_attachment,
   };
   showTypeModal.value = true;
+}
+
+async function deleteType(item: LeaveTypeItem) {
+  if (!confirm(`確定要刪除假別【${item.name} (${item.code})】嗎？若已有使用紀錄將無法刪除。`)) return;
+  try {
+    const res = await apiFetch(`/api/v1/hr/leave-types/${item.id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const err = await res.json();
+      alert(err.message || '刪除失敗');
+      return;
+    }
+    await fetchLeaveTypes();
+  } catch (e: any) {
+    alert(e.message || '刪除發生異常');
+  }
 }
 
 async function saveLeaveType() {
@@ -140,8 +155,6 @@ async function saveLeaveType() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          id: typeForm.value.id,
-          company_id: props.companyId,
           code: typeForm.value.code.trim().toUpperCase(),
           name: typeForm.value.name.trim(),
           unit: typeForm.value.unit,
@@ -338,7 +351,12 @@ onMounted(async () => {
     <div v-if="currentSubtab === 'types'" class="space-y-4">
       <div class="flex items-center justify-between">
         <div>
-          <h3 class="text-sm font-semibold text-slate-800">{{ t('hr.leaveAdmin.typesTitle') }}</h3>
+          <div class="flex items-center space-x-2">
+            <h3 class="text-sm font-semibold text-slate-800">{{ t('hr.leaveAdmin.typesTitle') }}</h3>
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-50 text-sky-700 border border-sky-200">
+              🌐 {{ t('hr.leaveAdmin.globalScopeBadge', '全組織共用（不分公司）') }}
+            </span>
+          </div>
           <p class="text-xs text-text-muted">{{ t('hr.leaveAdmin.typesSubtitle') }}</p>
         </div>
         <button
@@ -414,13 +432,20 @@ onMounted(async () => {
                     {{ lt.requires_attachment ? t('hr.leaveAdmin.attachmentRequired') : t('hr.leaveAdmin.attachmentOptional') }}
                   </span>
                 </td>
-                <td class="px-4 py-3 text-right">
+                <td class="px-4 py-3 text-right space-x-1">
                   <button
                     @click="openEditType(lt)"
                     class="px-2.5 py-1 text-[11px] font-medium rounded border border-slate-200 bg-white hover:bg-slate-50 text-blue-600 cursor-pointer inline-flex items-center space-x-1"
                   >
                     <span>✏️</span>
                     <span>{{ t('hr.leaveAdmin.editTypeBtn') }}</span>
+                  </button>
+                  <button
+                    @click="deleteType(lt)"
+                    class="px-2.5 py-1 text-[11px] font-medium rounded border border-rose-200 bg-white hover:bg-rose-50 text-rose-600 cursor-pointer inline-flex items-center space-x-1"
+                  >
+                    <span>🗑️</span>
+                    <span>刪除</span>
                   </button>
                 </td>
               </tr>
@@ -429,6 +454,7 @@ onMounted(async () => {
         </div>
       </div>
     </div>
+
 
     <!-- 子頁籤 2: 法定特休試算與批次發放 (Entitlements) -->
     <div v-else-if="currentSubtab === 'entitlements'" class="space-y-4">

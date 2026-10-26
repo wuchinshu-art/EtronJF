@@ -95,7 +95,7 @@ async function fetchData() {
   try {
     const [reqsRes, typesRes, empsRes] = await Promise.all([
       apiFetch(`/api/v1/leave/requests?company_id=${props.companyId}`),
-      apiFetch(`/api/v1/hr/leave-types?company_id=${props.companyId}`),
+      apiFetch('/api/v1/hr/leave-types'),
       apiFetch(`/api/v1/hr/employees?company_id=${props.companyId}`),
     ]);
 

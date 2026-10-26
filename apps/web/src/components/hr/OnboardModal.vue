@@ -71,9 +71,6 @@ const jobGrade = ref('');
 const employmentType = ref('REGULAR');
 const hireDate = ref(new Date().toISOString().split('T')[0]);
 const probationEndDate = ref('');
-
-const createUserAccount = ref(true);
-const initialPassword = ref('Welcome123!');
 const isSubmitting = ref(false);
 const errorMessage = ref('');
 
@@ -172,8 +169,6 @@ watch(
       employmentType.value = 'REGULAR';
       hireDate.value = new Date().toISOString().split('T')[0];
       probationEndDate.value = '';
-      createUserAccount.value = true;
-      initialPassword.value = 'Welcome123!';
       loadPersons();
       loadOrganizations(props.companyId);
       loadShifts(props.companyId);
@@ -218,8 +213,7 @@ async function submitOnboard() {
       job_grade: jobGrade.value.trim() || null,
       employment_type: employmentType.value,
       probation_end_date: probationEndDate.value || null,
-      create_user_account: createUserAccount.value,
-      initial_password: createUserAccount.value ? initialPassword.value : undefined,
+      create_user_account: false,
     };
 
     const res = await apiFetch('/api/v1/hr/employees', {
@@ -430,31 +424,6 @@ async function submitOnboard() {
           <FormField :label="t('hr.employee.probationEndDate')">
             <DateTimeInput v-model="probationEndDate" mode="date" />
           </FormField>
-
-          <!-- 登入帳號同步開通選項 -->
-          <div class="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-            <label class="flex items-center space-x-2.5 cursor-pointer">
-              <input
-                v-model="createUserAccount"
-                type="checkbox"
-                class="w-4 h-4 rounded text-(--color-primary) focus:ring-0"
-              />
-              <span class="text-xs font-semibold text-slate-800">{{ t('hr.onboardModal.createAccount') }}</span>
-            </label>
-
-            <div v-if="createUserAccount" class="space-y-1.5 pl-6">
-              <FormField :label="t('hr.onboardModal.initialPassword')">
-                <input
-                  v-model="initialPassword"
-                  type="text"
-                  class="w-full px-3 py-1.5 text-xs font-mono rounded-lg border border-slate-300 focus:outline-hidden focus:ring-1 focus:ring-(--color-primary)"
-                />
-              </FormField>
-              <p class="text-[11px] text-text-muted">
-                🔒 {{ t('hr.onboardModal.accountHint') }}
-              </p>
-            </div>
-          </div>
         </div>
       </div>
 

@@ -247,12 +247,12 @@ class CalendarDay(Base):
 
 
 class LeaveType(Base):
-    """假別主檔 (Leave Types)"""
+    """假別主檔 (Leave Types - 全域通用不分公司)"""
     __tablename__ = "leave_types"
 
     id = Column(String(50), primary_key=True)  # 例如 ANNUAL 特別休假, SICK 普通傷病假, PERSONAL 事假
-    company_id = Column(String(50), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
-    code = Column(String(50), nullable=False)
+    company_id = Column(String(50), ForeignKey("companies.id", ondelete="SET NULL"), nullable=True, index=True)
+    code = Column(String(50), nullable=False, unique=True, index=True)
     name = Column(String(100), nullable=False)
     unit = Column(String(10), default="MINUTES", nullable=False)  # MINUTES 或 DAYS
     requires_attachment = Column(Boolean, default=False, nullable=False)
@@ -262,7 +262,7 @@ class LeaveType(Base):
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     __table_args__ = (
-        UniqueConstraint("company_id", "code", name="uq_company_leave_code"),
+        UniqueConstraint("code", name="uq_leave_types_code"),
     )
 
 

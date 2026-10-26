@@ -1068,7 +1068,7 @@ class LeaveTypeResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
-    company_id: str
+    company_id: Optional[str] = None
     code: str
     name: str
     unit: str
@@ -1078,8 +1078,8 @@ class LeaveTypeResponse(BaseModel):
 
 
 class LeaveTypeCreate(BaseModel):
-    id: str
-    company_id: str
+    id: Optional[str] = None
+    company_id: Optional[str] = None
     code: str
     name: str
     unit: str = "HALF_HOUR"
@@ -1104,16 +1104,35 @@ def create_leave_type(
     _perm: None = Depends(require_permissions("hr.employee.manage")),
     db: DbSession = Depends(get_db),
 ):
+    """建立假別（假別為跨公司全域通用主檔，不分公司）"""
+    code_upper = req.code.strip().upper()
+    existing_code = db.execute(select(LeaveType).where(LeaveType.code == code_upper)).scalar_one_or_none()
+    if existing_code:
+        raise AppException(
+            code="LEAVE_TYPE_CODE_EXISTS",
+            message=f"假別代碼 [{code_upper}] 已存在，假別為全域不分公司主檔",
+            status_code=400,
+        )
+
+    lt_id = req.id or f"LT-{code_upper}"
+    existing_id = db.get(LeaveType, lt_id)
+    if existing_id:
+        raise AppException(
+            code="LEAVE_TYPE_ID_EXISTS",
+            message=f"假別識別碼 [{lt_id}] 已存在",
+            status_code=400,
+        )
+
     paid_type = req.paid_type
     if not paid_type:
         paid_type = "FULL" if req.is_paid else "UNPAID"
     is_paid = (paid_type != "UNPAID")
     
     lt = LeaveType(
-        id=req.id,
+        id=lt_id,
         company_id=req.company_id,
-        code=req.code,
-        name=req.name,
+        code=code_upper,
+        name=req.name.strip(),
         unit=req.unit,
         requires_attachment=req.requires_attachment,
         is_paid=is_paid,
@@ -1123,6 +1142,27 @@ def create_leave_type(
     db.commit()
     db.refresh(lt)
     return lt
+
+
+@router.delete("/leave-types/{id}", status_code=status.HTTP_200_OK)
+def delete_leave_type(
+    id: str,
+    _perm: None = Depends(require_permissions("hr.employee.manage")),
+    db: DbSession = Depends(get_db),
+):
+    """刪除假別（僅限未產生假額帳本或假單紀錄之假別）"""
+    lt = db.get(LeaveType, id)
+    if not lt:
+        raise AppException(code="LEAVE_TYPE_NOT_FOUND", message=f"假別代號 [{id}] 不存在", status_code=404)
+    
+    # 檢查是否已在帳本中使用
+    has_ledger = db.execute(select(LeaveLedger).where(LeaveLedger.leave_type_id == id)).scalars().first()
+    if has_ledger:
+        raise AppException(code="LEAVE_TYPE_IN_USE", message="該假別已有發放或使用之假額帳本紀錄，不可刪除", status_code=400)
+    
+    db.delete(lt)
+    db.commit()
+    return {"message": f"假別 [{id}] 已成功刪除"}
 
 
 @router.post("/leave-ledger/grant", status_code=status.HTTP_201_CREATED)
@@ -1176,12 +1216,13 @@ def list_calendar_days(
 
 @router.get("/leave-types", response_model=List[LeaveTypeResponse])
 def list_leave_types(
-    company_id: str = Query(..., description="公司代碼"),
+    company_id: Optional[str] = Query(None, description="公司代碼（選填，因假別為全域不分公司主檔，不傳或傳入均回傳全域假別）"),
     db: DbSession = Depends(get_db),
 ):
-    """查詢公司假別清單"""
-    stmt = select(LeaveType).where(LeaveType.company_id == company_id)
+    """查詢全域假別清單（不分公司）"""
+    stmt = select(LeaveType).order_by(LeaveType.code)
     return db.execute(stmt).scalars().all()
+
 
 
 @router.get("/leave-ledger/balance")

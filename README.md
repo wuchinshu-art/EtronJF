@@ -2389,4 +2389,65 @@
   3. **後端 API 伺服器端授權 (Backend Server-side Authorization)**：後端依據 RBAC 機制確認其具備 ADMIN 身分，全量開放全公司範圍之業務查詢、表單提交、核准駁回及系統參數設定端點。
 - **驗證方式 (Verification)**：
   - 經由 ORM 檢索驗證 UserRole 表，確認角色陣列已正確寫入 ['ADMIN', 'HR_ADMIN']。
-# EtronJF
+
+#### 假別(假種) 不分公司全域主檔架構重構 (Global Leave Types Architecture & Database Migration)
+
+- **執行時間**：2026-10-26
+- **需求來源與目標 (Requirements & Objective)**：
+  - 使用者明確指示：「假別(假種) 不分公司」。
+  - 過去假別（`leave_types`）與特定公司關聯（`company_id` 設為非空且具備 `(company_id, code)` 複合唯一約束），造成各公司需重複定義相同假別，且無法實現全集團共通之休假政策與全域假別定義。
+  - 本次任務將假別主檔重構為**全集團全域通用主檔 (System-wide / Global Master Data)**，徹底解除單一公司鎖定。
+- **架構設計與實作處置 (Architectural Solutions & Actions)**：
+  1. **資料庫模型與平滑遷移 (Database Model & Alembic Migration)**：
+     - 在 [apps/api/app/models/hr.py](file:///C:/Sources/EtronJF8/apps/api/app/models/hr.py) 中重構 `LeaveType` 模型：
+       - `company_id` 調整為可為空 (`nullable=True`)，外鍵關聯調整為 `ondelete="SET NULL"`。
+       - 唯一鍵約束由舊有 `(company_id, code)` 調整為全域代碼唯一性約束 `uq_leave_types_code` (`code` 唯一)。
+     - 建立 Alembic 遷移腳本 [e4f5a6b7c8d9_make_leave_types_global.py](file:///C:/Sources/EtronJF8/apps/api/alembic/versions/e4f5a6b7c8d9_make_leave_types_global.py)，採用 SQLite 專用之 `batch_alter_table` 機制重構資料表約束，並實測通過 `upgrade head` 與 `downgrade -1` 之雙向可逆遷移。
+  2. **後端 API 與契約規範 (API Contract & Schemas)**：
+     - [apps/api/app/api/v1/hr.py](file:///C:/Sources/EtronJF8/apps/api/app/api/v1/hr.py)：
+       - `LeaveTypeCreate` 與 `LeaveTypeResponse` 中的 `company_id` 調整為選填 (`Optional[str] = None`)，`id` 預設依代碼自動生成 `LT-{CODE}`。
+       - `POST /api/v1/hr/leave-types`：檢查假別代碼全域唯一性（重複即回傳 400 衝突錯誤），建立全域假別。
+       - `GET /api/v1/hr/leave-types`：`company_id` 轉為選填參數；無論是否傳入或傳入何種公司代碼，均回傳全域共用之完整假別清單，不因公司篩選而被遮蔽。
+       - `DELETE /api/v1/hr/leave-types/{id}`：新增刪除防護端點，未使用的假別可刪除；若已有假額帳本 (`leave_ledger`) 或假單 (`leave_requests`) 引用則禁止刪除並保護歷史帳本。
+  3. **核心業務邏輯與流程連動 (Core Services & Business Rules)**：
+     - [apps/api/app/core/hr_rules.py](file:///C:/Sources/EtronJF8/apps/api/app/core/hr_rules.py)：
+       - `LeaveLedgerService.get_leave_quota_summary`：移除假別之公司篩選，使跨公司員工均能於假額彙總中查詢所有全域假別。
+       - `LeaveEntitlementService.calculate_company_annual_leave_entitlements`：特別休假主檔由特定公司檢索調整為全域檢索。
+     - [apps/api/app/core/leave_service.py](file:///C:/Sources/EtronJF8/apps/api/app/core/leave_service.py)：
+       - 請假單建立時檢索全域假別代碼與名稱，動態生成之預設假別亦以全域方式初始化 (`company_id=None`)。
+     - [apps/api/app/core/overtime_service.py](file:///C:/Sources/EtronJF8/apps/api/app/core/overtime_service.py)：
+       - 加班核准轉補休時，自動關聯全域補休假別（`LT-COMPENSATORY`），不再於各公司分開建立補休假種。
+  4. **前端使用者介面與多語系 (Frontend UI & i18n)**：
+     - [LeaveAdminView.vue](file:///C:/Sources/EtronJF8/apps/web/src/components/hr/LeaveAdminView.vue)：
+       - 假別主檔標題追加「🌐 全組織共用（不分公司）」之全域徽章提示。
+       - 假別載入呼叫全域 `/api/v1/hr/leave-types`，新增假別不再強制指定特定公司。
+       - 表格新增刪除操作按鈕並附帶安全提示。
+     - [LeaveManagementView.vue](file:///C:/Sources/EtronJF8/apps/web/src/components/leave/LeaveManagementView.vue) 與 [LeaveLedgerView.vue](file:///C:/Sources/EtronJF8/apps/web/src/components/hr/LeaveLedgerView.vue)：
+       - 請假申請與假額帳本查詢同步採用全域假別呼叫。
+     - [i18n.ts](file:///C:/Sources/EtronJF8/apps/web/src/locales/i18n.ts)：
+       - 完整對齊四語系（繁中 `zh-TW`、日語 `ja-JP`、英語 `en-US`、簡中 `zh-CN`）之 `globalScopeBadge` 與 `typesSubtitle` 說明。
+  5. **自動化驗證成果 (Automated Verification Summary)**：
+     - 專屬整合測試：[apps/api/tests/test_leave_types_global.py](file:///C:/Sources/EtronJF8/apps/api/tests/test_leave_types_global.py)
+       - 驗證建立無 `company_id` 假別、全域代碼重複防護、跨公司（ETJ-TW 與 ETJ-JP）共用同假種、雙公司發放假額與額度彙總、已有帳本刪除防護。
+     - 後端測試：`pytest apps/api/tests` 請假、人事與加班核心測試共 28 項 100% 通過（含 `test_leave_vertical_slice`、`test_leave_entitlement`、`test_hr_master`、`test_hr_full_system`、`test_overtime_vertical_slice`、`test_leave_types_global`）。
+     - 前端測試：`npm test` 7 個測試套件、25 項測試 100% 通過（含四語系完整度校驗）。
+
+#### 員工到職報到作業移除同步開通登入帳號功能 (Employee Onboarding Decoupling from Account Creation)
+
+- **執行時間**：2026-10-26
+- **需求來源與目標 (Requirements & Objective)**：
+  - 使用者明確指示：「辦理員工到職報到作業, 不需要此功能（同步開通登入帳號）」。
+  - 貫徹架構設計原則：**帳號與員工主體分離 (Decoupling of User Account and Employee Master)**。人事部門辦理員工到職報到時，應專注於人員個資（Person Profile）、在職任職關係（Employment Assignment）、工號、部門、職稱與到職日期之建置；系統登入帳號開通與角色授權應回歸由資訊管理員或帳號權限模組（`auth-rbac`）專屬控管，避免人資在無系統管理授權下直接派發使用者帳號與預設密碼。
+- **實作處置與架構調整 (Actions & Architectural Changes)**：
+  1. **前端組件調整 ([OnboardModal.vue](file:///C:/Sources/EtronJF8/apps/web/src/components/hr/OnboardModal.vue))**：
+     - 從報到作業視窗中完整移除「☑ 同步開通登入帳號」核取方塊及其展開之「初始密碼 (Initial Password)」設定區塊。
+     - 移除組件內 `createUserAccount` 與 `initialPassword` 之響應式狀態與監聽重設。
+     - 報到送出 Payload 明確指定 `create_user_account: false`，不傳遞密碼參數。
+  2. **後端服務相容性 (Backend Service Compatibility)**：
+     - 後端 [apps/api/app/api/v1/hr.py](file:///C:/Sources/EtronJF8/apps/api/app/api/v1/hr.py) 及 [apps/api/app/core/hr_rules.py](file:///C:/Sources/EtronJF8/apps/api/app/core/hr_rules.py) 之 `EmployeeCreate` 本身即定義 `create_user_account: bool = False` 為預設值，完全相容於不建立帳號的純人事到職流程。
+- **全流程驗證成果 (Verification Summary)**：
+  - 前端靜態類型檢查：`npm run typecheck` (`vue-tsc --noEmit`) 0 錯誤通過。
+  - 前端單元測試：`npm test` 7 個測試套件、25 項測試 100% 通過。
+  - 後端人事全系統測試：`pytest apps/api/tests/test_hr_full_system.py` 9/9 100% 通過。
+
+

@@ -790,9 +790,9 @@ onMounted(async () => {
 
       <!-- 搜尋與過濾工具列 -->
       <div class="bg-white p-4 rounded-xl border border-border-main shadow-xs flex flex-wrap items-center justify-between gap-3">
-        <div class="flex flex-wrap items-center gap-2.5 flex-1 min-w-[280px]">
+        <div class="flex flex-wrap items-center gap-2.5 flex-1 min-w-70">
           <!-- 關鍵字搜尋 -->
-          <div class="relative flex-1 min-w-[200px]">
+          <div class="relative flex-1 min-w-50">
             <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400">🔍</span>
             <input
               v-model="searchKeyword"

@@ -308,7 +308,7 @@ onMounted(() => {
     <!-- Tab 1: 在職員工與任職管理 (第 2 步到第 4 步：報到/異動/離職) -->
     <div v-else-if="activeTab === 'employees'" class="space-y-4">
       <!-- 生命週期指引橫幅 -->
-      <div class="p-3.5 bg-gradient-to-r from-blue-50/70 via-indigo-50/50 to-slate-50 rounded-xl border border-blue-100 flex flex-wrap items-center justify-between gap-3">
+      <div class="p-3.5 bg-linear-to-r from-blue-50/70 via-indigo-50/50 to-slate-50 rounded-xl border border-blue-100 flex flex-wrap items-center justify-between gap-3">
         <div class="flex items-center space-x-2 text-xs">
           <span class="font-bold text-slate-800">{{ t('hr.lifecycle.bannerTitle') }}</span>
           <div class="flex items-center space-x-1.5 text-slate-600 font-medium">

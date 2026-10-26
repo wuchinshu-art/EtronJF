@@ -170,7 +170,7 @@ onUnmounted(() => {
     </div>
 
     <!-- 在線打卡卡片 -->
-    <div class="bg-gradient-to-r from-sky-50 to-indigo-50 p-6 rounded-2xl border border-sky-100 flex flex-col md:flex-row items-center justify-between gap-6 shadow-xs">
+    <div class="bg-linear-to-r from-sky-50 to-indigo-50 p-6 rounded-2xl border border-sky-100 flex flex-col md:flex-row items-center justify-between gap-6 shadow-xs">
       <div>
         <div class="flex items-center space-x-2 mb-1">
           <span class="text-xs font-semibold px-2 py-0.5 rounded bg-sky-100 text-sky-800">

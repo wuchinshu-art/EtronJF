@@ -397,7 +397,7 @@ onMounted(() => fetchData());
               <td class="px-4 py-3 font-semibold text-slate-800">
                 {{ r.calculated_days }} 天 ({{ r.total_minutes }}分)
               </td>
-              <td class="px-4 py-3 text-slate-600 max-w-[200px] truncate" :title="r.reason">{{ r.reason }}</td>
+              <td class="px-4 py-3 text-slate-600 max-w-50 truncate" :title="r.reason">{{ r.reason }}</td>
               <td class="px-4 py-3">
                 <StatusBadge :status="r.status" />
               </td>

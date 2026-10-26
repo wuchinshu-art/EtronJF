@@ -490,7 +490,7 @@ onMounted(async () => {
             <span class="text-xs font-medium text-slate-700">{{ t('hr.org.activeStatus', '啟用狀態') }}</span>
             <label class="relative inline-flex items-center cursor-pointer">
               <input type="checkbox" v-model="formIsActive" class="sr-only peer" />
-              <div class="w-9 h-5 bg-slate-200 peer-focus:outline-hidden rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-(--color-primary)"></div>
+              <div class="w-9 h-5 bg-slate-200 peer-focus:outline-hidden rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-(--color-primary)"></div>
               <span class="ml-2 text-xs font-semibold text-slate-600">
                 {{ formIsActive ? t('hr.org.active', '啟用') : t('hr.org.inactive', '停用') }}
               </span>

@@ -2253,10 +2253,6 @@
   - 前端靜態類型與構建：`npm run build` (`vue-tsc -b && vite build`) 0 錯誤構建成功。
   - 後端測試：`pytest tests` 74/74 通過。
 
-
-
-
-
 #### 營運儀表板關鍵字搜尋無效問題修復 (Dashboard Filter & Search Fix)
 
 - **執行時間**：2026-10-25
@@ -2363,12 +2359,14 @@
     - 需在 HTTP Header 攜帶 CSRF 驗證權杖：`X-CSRF-Token: <csrf_token>`。
     - 必須具備 `system.role.manage` 或 `ADMIN` 最高權限。
   - **請求本文 (Request Body - JSON)**：
+
     ```json
     {
       "company_id": "ETJ-TW",
       "role_ids": ["HR_ADMIN", "ADMIN"]
     }
     ```
+
   - **更新機制說明 (Replacement Semantic)**：
     - 此端點採公司範圍內的角色全量更新（Full Replacement）。若要在原有角色上疊加 `ADMIN`，清單需同時包含原角色（如 `HR_ADMIN`）與新增角色（`ADMIN`）。
     - 系統具備相容容錯機制：若未傳 `company_id`，自動 Fallback 為該使用者之 `primary_company_id`；欄位名稱同時支援 `role_ids` 與 `role_names`。
@@ -2454,14 +2452,14 @@
 
 - **執行時間**：2026-10-26
 - **問題回報與分析 (Problem & Root Cause)**：
-  - 使用者回報在「建立新系統帳號 (Create User Modal)」對話框中，「關聯員工工號 (可選)」下拉選單僅顯示「工號 - 」，後面缺乏員工姓名（如 `TW801 - `、`TW802 - `）。
+  - 使用者回報在「建立新系統帳號 (Create User Modal)」對話框中，「關聯員工工號 (可選)」下拉選單僅顯示「工號 - 」，後面缺乏員工姓名（如 `TW801 -`、`TW802 -`）。
   - 經查 [apps/web/src/components/users/UserManagementView.vue](file:///C:/Sources/EtronJF8/apps/web/src/components/users/UserManagementView.vue)，下拉選單模板誤引用了未定義之 `{{ e.last_name }}{{ e.first_name }}` 欄位，而後端人事模型 [Employee](file:///C:/Sources/EtronJF8/apps/api/app/models/hr.py) 及 API 統一回傳全名字段 `full_name`，導致姓名處呈現空白。
 - **實作處置與架構調整 (Actions & Architectural Changes)**：
   1. **型別定義校正 (TypeScript Interface Alignment)**：
      - 在 `UserManagementView.vue` 的 `EmployeeItem` 介面明確定義 `full_name: string`，相容既有屬性。
   2. **下拉選單顯示模板修正 (Dropdown Template Correction)**：
      - 將「建立新系統帳號」與「編輯帳號」Modal 中「關聯員工工號」選項統一修正為：
-       `{{ e.employee_no }} - {{ e.full_name || `${e.last_name || ''}${e.first_name || ''}` }}`
+       `{{ e.employee_no }} - {{ e.full_name }}`
      - 完整呈現「**工號 - 姓名**」格式（如 `TW801 - 王大明`）。
   3. **公司與員工連動體驗升級 (Company-Employee Dynamic Loading & Auto-fill)**：
      - 增加 `watch(() => createForm.value.active_company_id)`：切換「主屬營運公司」時，自動即時重載該公司的員工清單，並重設選取項目。
@@ -2513,7 +2511,3 @@
     - 指令：`pytest apps/api/tests -q`（全模組 77 passed，100% 通過）。
   - **前端靜態類型與生產建置**：`npm run build`（`vue-tsc -b && vite build` 0 錯誤打包通過）。
   - **前端單元測試**：`npm test`（7 個測試套件、25 項測試 100% 通過）。
-
-
-
-

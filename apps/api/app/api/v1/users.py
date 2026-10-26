@@ -337,8 +337,7 @@ def create_user(
         is_first_login=True,
     )
     db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
+    db.flush()
 
     # 建立主公司 scope
     scope = UserScope(
@@ -348,19 +347,33 @@ def create_user(
     )
     db.add(scope)
 
-    # 建立角色關聯 (預設至少 GENERAL_USER)
+    # 建立角色關聯 (預設至少 GENERAL_USER，並以 set 去重防止重複指派)
     candidate_roles = req.role_ids if req.role_ids else (req.roles if req.roles else ["GENERAL_USER"])
+    assigned_role_ids = set()
     for rid in candidate_roles:
         role = db.get(Role, rid)
         if not role:
             role = db.execute(select(Role).where(Role.name == rid)).scalar_one_or_none()
-        if role:
+        if role and role.id not in assigned_role_ids:
+            assigned_role_ids.add(role.id)
             db.add(UserRole(
                 user_id=new_user.id,
                 role_id=role.id,
                 company_id=comp_id,
             ))
+
+    if not assigned_role_ids:
+        gu_role = db.get(Role, "GENERAL_USER") or db.execute(select(Role).where(Role.name == "GENERAL_USER")).scalar_one_or_none()
+        if gu_role and gu_role.id not in assigned_role_ids:
+            assigned_role_ids.add(gu_role.id)
+            db.add(UserRole(
+                user_id=new_user.id,
+                role_id=gu_role.id,
+                company_id=comp_id,
+            ))
+
     db.commit()
+    db.refresh(new_user)
 
     return {
         "status": "success",

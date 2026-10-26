@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, status, Query
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
-from sqlalchemy.orm import Session as DbSession
+from sqlalchemy.orm import Session as DbSession, joinedload
 from sqlalchemy import select
 
 from app.core.database import get_db
@@ -148,6 +148,7 @@ class OrgCreate(BaseModel):
     name: str
     parent_id: Optional[str] = None
     level: str = "DEPARTMENT"
+    manager_id: Optional[str] = None
     effective_date: Optional[date] = None
     expiry_date: Optional[date] = None
 
@@ -157,6 +158,7 @@ class OrgUpdate(BaseModel):
     name: Optional[str] = None
     parent_id: Optional[str] = None
     level: Optional[str] = None
+    manager_id: Optional[str] = None
     effective_date: Optional[date] = None
     expiry_date: Optional[date] = None
     is_active: Optional[bool] = None
@@ -169,6 +171,9 @@ class OrgResponse(BaseModel):
     name: str
     parent_id: Optional[str] = None
     level: str
+    manager_id: Optional[str] = None
+    manager_name: Optional[str] = None
+    manager_no: Optional[str] = None
     effective_date: Optional[date] = None
     expiry_date: Optional[date] = None
     is_active: bool
@@ -183,7 +188,7 @@ def list_organizations(
     company_id: Optional[str] = Query(None, description="所屬公司代碼 (留空則查詢全部)"),
     db: DbSession = Depends(get_db),
 ):
-    stmt = select(Organization)
+    stmt = select(Organization).options(joinedload(Organization.manager))
     if company_id:
         stmt = stmt.where(Organization.company_id == company_id)
     stmt = stmt.order_by(Organization.company_id, Organization.code)
@@ -217,6 +222,12 @@ def create_organization(
     if existing:
         raise AppException(code="ORG_CODE_EXISTS", message=f"部門代號 [{req.code}] 已在該公司存在", status_code=400)
 
+    # 部門主管檢核 (須屬於該公司)
+    if req.manager_id:
+        manager_emp = db.get(Employee, req.manager_id)
+        if not manager_emp or manager_emp.company_id != req.company_id:
+            raise AppException(code="MANAGER_NOT_FOUND", message="找不到指定之主管或主管跨公司歸屬不合", status_code=400)
+
     org = Organization(
         id=req.id,
         company_id=req.company_id,
@@ -224,6 +235,7 @@ def create_organization(
         name=req.name,
         parent_id=req.parent_id,
         level=req.level,
+        manager_id=req.manager_id if req.manager_id else None,
         effective_date=req.effective_date,
         expiry_date=req.expiry_date,
     )
@@ -280,6 +292,17 @@ def update_organization(
         org.name = req.name
     if req.level is not None:
         org.level = req.level
+
+    # 部門主管設定 (支援清空為 None 或更新主管，並驗證同公司)
+    if req.manager_id is not None:
+        if req.manager_id != "":
+            manager_emp = db.get(Employee, req.manager_id)
+            if not manager_emp or manager_emp.company_id != org.company_id:
+                raise AppException(code="MANAGER_NOT_FOUND", message="找不到指定之主管或主管跨公司歸屬不合", status_code=400)
+            org.manager_id = req.manager_id
+        else:
+            org.manager_id = None
+
     if req.effective_date is not None:
         org.effective_date = req.effective_date
     if req.expiry_date is not None:

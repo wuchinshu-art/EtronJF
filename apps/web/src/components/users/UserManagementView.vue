@@ -61,8 +61,10 @@ interface CompanyItem {
 interface EmployeeItem {
   id: string;
   employee_no: string;
-  first_name: string;
-  last_name: string;
+  full_name: string;
+  first_name?: string;
+  last_name?: string;
+  email?: string;
   department_name?: string;
 }
 
@@ -220,18 +222,47 @@ const createForm = ref({
 });
 
 function openCreateModal() {
+  const defaultComp = props.companyId || (companies.value[0]?.id ?? 'ETJ-TW');
   createForm.value = {
     username: '',
     display_name: '',
     email: '',
     password: '',
-    active_company_id: props.companyId || (companies.value[0]?.id ?? 'ETJ-TW'),
+    active_company_id: defaultComp,
     employee_id: '',
     roles: ['GENERAL_USER'],
     must_change_password: true,
   };
+  fetchEmployees(defaultComp);
   showCreateModal.value = true;
 }
+
+watch(
+  () => createForm.value.active_company_id,
+  (newComp) => {
+    if (newComp && showCreateModal.value) {
+      fetchEmployees(newComp);
+      createForm.value.employee_id = '';
+    }
+  }
+);
+
+watch(
+  () => createForm.value.employee_id,
+  (newEmpId) => {
+    if (newEmpId) {
+      const targetEmp = employees.value.find((e) => e.id === newEmpId);
+      if (targetEmp) {
+        if (!createForm.value.display_name && targetEmp.full_name) {
+          createForm.value.display_name = targetEmp.full_name;
+        }
+        if (!createForm.value.email && targetEmp.email) {
+          createForm.value.email = targetEmp.email;
+        }
+      }
+    }
+  }
+);
 
 async function handleCreateUser() {
   if (!createForm.value.username || !createForm.value.display_name || !createForm.value.email || !createForm.value.password) {
@@ -240,12 +271,17 @@ async function handleCreateUser() {
   }
   try {
     const targetComp = createForm.value.active_company_id || props.companyId || (companies.value[0]?.id ?? 'ETJ-TW');
+    const uniqueRoles = Array.from(new Set(createForm.value.roles.filter(Boolean)));
     const payload = {
-      ...createForm.value,
+      username: createForm.value.username.trim(),
+      display_name: createForm.value.display_name.trim(),
+      email: createForm.value.email.trim(),
+      password: createForm.value.password,
       primary_company_id: targetComp,
       active_company_id: targetComp,
-      role_ids: createForm.value.roles,
+      role_ids: uniqueRoles.length > 0 ? uniqueRoles : ['GENERAL_USER'],
       employee_id: createForm.value.employee_id ? createForm.value.employee_id : null,
+      must_change_password: createForm.value.must_change_password,
     };
     const res = await fetch('/api/v1/users', {
       method: 'POST',
@@ -259,7 +295,7 @@ async function handleCreateUser() {
       await fetchRolesMeta();
     } else {
       const err = await res.json();
-      const msg = typeof err.detail === 'string' ? err.detail : (Array.isArray(err.detail) ? err.detail.map((d: any) => d.msg).join('; ') : '建立帳號失敗');
+      const msg = err.error?.message || err.message || (typeof err.detail === 'string' ? err.detail : (Array.isArray(err.detail) ? err.detail.map((d: any) => d.msg).join('; ') : '建立帳號失敗'));
       showToast(msg, 'error');
     }
   } catch {
@@ -1213,7 +1249,7 @@ onMounted(async () => {
               >
                 <option value="">無 (外部或系統專用帳號)</option>
                 <option v-for="e in employees" :key="e.id" :value="e.id">
-                  {{ e.employee_no }} - {{ e.last_name }}{{ e.first_name }}
+                  {{ e.employee_no }} - {{ e.full_name || `${e.last_name || ''}${e.first_name || ''}` }}
                 </option>
               </select>
             </div>
@@ -1320,7 +1356,7 @@ onMounted(async () => {
             >
               <option value="">無 (未綁定)</option>
               <option v-for="e in employees" :key="e.id" :value="e.id">
-                {{ e.employee_no }} - {{ e.last_name }}{{ e.first_name }}
+                {{ e.employee_no }} - {{ e.full_name || `${e.last_name || ''}${e.first_name || ''}` }}
               </option>
             </select>
           </div>

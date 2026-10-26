@@ -2450,4 +2450,70 @@
   - 前端單元測試：`npm test` 7 個測試套件、25 項測試 100% 通過。
   - 後端人事全系統測試：`pytest apps/api/tests/test_hr_full_system.py` 9/9 100% 通過。
 
+#### 系統帳號關聯員工工號下拉選項優化為「工號 - 姓名」格式 (User Management Employee Mapping Dropdown Enhancement)
+
+- **執行時間**：2026-10-26
+- **問題回報與分析 (Problem & Root Cause)**：
+  - 使用者回報在「建立新系統帳號 (Create User Modal)」對話框中，「關聯員工工號 (可選)」下拉選單僅顯示「工號 - 」，後面缺乏員工姓名（如 `TW801 - `、`TW802 - `）。
+  - 經查 [apps/web/src/components/users/UserManagementView.vue](file:///C:/Sources/EtronJF8/apps/web/src/components/users/UserManagementView.vue)，下拉選單模板誤引用了未定義之 `{{ e.last_name }}{{ e.first_name }}` 欄位，而後端人事模型 [Employee](file:///C:/Sources/EtronJF8/apps/api/app/models/hr.py) 及 API 統一回傳全名字段 `full_name`，導致姓名處呈現空白。
+- **實作處置與架構調整 (Actions & Architectural Changes)**：
+  1. **型別定義校正 (TypeScript Interface Alignment)**：
+     - 在 `UserManagementView.vue` 的 `EmployeeItem` 介面明確定義 `full_name: string`，相容既有屬性。
+  2. **下拉選單顯示模板修正 (Dropdown Template Correction)**：
+     - 將「建立新系統帳號」與「編輯帳號」Modal 中「關聯員工工號」選項統一修正為：
+       `{{ e.employee_no }} - {{ e.full_name || `${e.last_name || ''}${e.first_name || ''}` }}`
+     - 完整呈現「**工號 - 姓名**」格式（如 `TW801 - 王大明`）。
+  3. **公司與員工連動體驗升級 (Company-Employee Dynamic Loading & Auto-fill)**：
+     - 增加 `watch(() => createForm.value.active_company_id)`：切換「主屬營運公司」時，自動即時重載該公司的員工清單，並重設選取項目。
+     - 增加 `watch(() => createForm.value.employee_id)`：當選取特定員工且帳號之顯示姓名為空時，自動預填該員工之 `full_name` 與 `email`，大幅減少手動重複鍵入。
+  4. **後端帳號建立原子交易與角色去重修復 (Atomic Transaction & Role Deduplication)**：
+     - 在 [apps/api/app/api/v1/users.py](file:///C:/Sources/EtronJF8/apps/api/app/api/v1/users.py) 中，將原本提早執行的 `db.commit()` 改為 `db.flush()`，延後至使用者主體、公司 Scope 與角色全部寫入後才執行原子 commit，防止角色建立失敗留存半成品使用者而引發後續 409 Conflict。
+     - 在指派角色邏輯中引入 `set()` 去重機制，避免前端傳入重複角色代碼時觸發 SQLite `user_roles` 複合唯一主鍵衝突 (`IntegrityError: UNIQUE constraint failed`)。
+- **全流程驗證成果 (Verification Summary)**：
+  - 前端靜態類型檢查：`npm run typecheck` (`vue-tsc --noEmit`) 0 錯誤通過。
+  - 前端單元測試：`npm test` 7 個測試套件、25 項測試 100% 通過。
+  - 後端帳號權限測試：`pytest apps/api/tests/test_auth_rbac.py` 7/7 100% 通過。
+
+#### 組織部門支援設定主管功能 (Department Manager Assignment for Organizations)
+
+- **執行時間**：2026-10-26
+- **需求來源與目標 (Requirements & Objective)**：
+  - 使用者明確指示：「要可以設定部門主管」。
+  - 核心價值：在多法人多公司之組織架構中，部門（`Organization`）是簽核授權、考勤審核與階層代理的基礎節點。允許各部門直接指派負責之部門主管（Department Manager），有利於簽核流程（Workflow Engine）動態解析組織層級審核者，並使組織樹視覺化呈現各單位負責人。
+- **架構設計與實作處置 (Architecture & Implementation Details)**：
+  1. **資料庫遷移與結構演進 (Database Migration)**：
+     - 新增 Alembic 遷移腳本 [apps/api/alembic/versions/f5a6b7c8d9e0_add_manager_id_to_organizations.py](file:///C:/Sources/EtronJF8/apps/api/alembic/versions/f5a6b7c8d9e0_add_manager_id_to_organizations.py)。
+     - 在 `organizations` 表中增加欄位 `manager_id VARCHAR(36)`（Nullable，外鍵參照 `employees.id`，支援 `ON DELETE SET NULL`）。
+     - 建立索引 `ix_organizations_manager_id`。
+     - 遷移支援可逆之 `upgrade()` 與 `downgrade()`，針對 SQLite 特性妥善處置 `PRAGMA foreign_keys = OFF`。
+  2. **模型擴充與雙向循環依賴解法 (ORM Model & Circular Dependency Resolution)**：
+     - 在 [apps/api/app/models/hr.py](file:///C:/Sources/EtronJF8/apps/api/app/models/hr.py) 的 `Organization` 模型加入：
+       - `manager_id = Column(String(36), ForeignKey("employees.id", ondelete="SET NULL", use_alter=True), nullable=True, index=True)`
+       - `manager = relationship("Employee", foreign_keys=[manager_id], post_update=True)`
+       - 屬性方法 `manager_name` 與 `manager_no`：動態回傳主管姓名與工號。
+     - 在 `Employee` 模型明確指定 `organization = relationship("Organization", back_populates="employees", foreign_keys=[organization_id])`。
+     - **關鍵技術點**：因 `Organization.manager_id` 與 `Employee.organization_id` 形成互相參照之雙向外鍵環，在關係上標註 `post_update=True` 及外鍵上標註 `use_alter=True`，確保 SQLAlchemy 單元作業（Unit of Work）拓撲排序時先執行 INSERT 再行 UPDATE，徹底杜絕外鍵約束失敗與 Metadata drop 警告。
+  3. **API 契約更新與跨公司資料隔離防護 (API Contract & Multi-Company Boundary)**：
+     - 在 [apps/api/app/api/v1/hr.py](file:///C:/Sources/EtronJF8/apps/api/app/api/v1/hr.py)：
+       - `OrgCreate`、`OrgUpdate`、`OrgResponse` 擴展支援 `manager_id`、`manager_name`、`manager_no`。
+       - `GET /api/v1/hr/organizations` 採用 `joinedload(Organization.manager)` 預先載入，避免 N+1 查詢。
+       - `POST /api/v1/hr/organizations` 與 `PUT /api/v1/hr/organizations/{id}` 嚴格檢驗主管所屬法人公司（`manager_emp.company_id == org.company_id`），若跨公司指派則拋出 `400 MANAGER_NOT_FOUND`，維護多法人安全邊界。
+       - 支援傳入 `""` 或 `None` 清空部門主管設定。
+  4. **前端組織樹介面與動態切換支援 (Frontend UI & Dynamic Employee Loading)**：
+     - 在 [apps/web/src/components/hr/OrgTree.vue](file:///C:/Sources/EtronJF8/apps/web/src/components/hr/OrgTree.vue)：
+       - `OrgItem` 介面增加 `manager_id`、`manager_name`、`manager_no`。
+       - 在新增/編輯組織視窗加入「部門主管 (Department Manager)」下拉選單，選項格式規範為 `{{ emp.employee_no }} - {{ emp.full_name }}`。
+       - 新增公司切換連動：當新增組織選擇不同公司時，自動非同步加載該公司專屬在職員工名冊，並重設選取項目。
+       - 組織卡片視圖增加主管標記：若已指定主管，卡片顯示 `👤 姓名 (工號)`。
+- **全流程驗證成果 (Verification Summary)**：
+  - **資料庫遷移驗證**：`python -m alembic upgrade head` 與 `python -m alembic downgrade -1` 雙向切換成功。
+  - **後端專屬與全套測試**：
+    - 專屬整合測試：`test_organization_manager_assignment` 驗證同公司指派、跨公司攔截、清單回傳姓名工號、清空主管等完整生命週期。
+    - 指令：`pytest apps/api/tests/test_hr_full_system.py`（10 passed，100% 通過）。
+    - 指令：`pytest apps/api/tests -q`（全模組 77 passed，100% 通過）。
+  - **前端靜態類型與生產建置**：`npm run build`（`vue-tsc -b && vite build` 0 錯誤打包通過）。
+  - **前端單元測試**：`npm test`（7 個測試套件、25 項測試 100% 通過）。
+
+
+
 

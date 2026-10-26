@@ -282,6 +282,93 @@ def test_organization_update_and_effective_dates(client, hr_env, db_session):
     assert deactivate_res.json()["is_active"] is False
 
 
+def test_organization_manager_assignment(client, hr_env, db_session):
+    """
+    測試：組織部門主管設定 (Department Manager Assignment)
+    - 支援建立部門時指派同公司主管
+    - 阻擋跨公司指派主管
+    - 組織清單正確回傳主管工號與姓名
+    - 支援更新或清空主管
+    """
+    headers = get_auth_headers(client)
+
+    # 建立主管員工資料
+    tw_mgr = Employee(
+        id="emp-tw-mgr",
+        employee_no="TW901",
+        company_id="ETJ-TW",
+        organization_id="ORG-RD",
+        full_name="陳主管",
+        email="twmgr@etron.com",
+        hire_date=date(2026, 1, 1),
+    )
+    jp_mgr = Employee(
+        id="emp-jp-mgr",
+        employee_no="JP901",
+        company_id="ETJ-JP",
+        organization_id="ORG-JP-DEV",
+        full_name="佐藤主管",
+        email="jpmgr@etron.com",
+        hire_date=date(2026, 1, 1),
+    )
+    db_session.add_all([tw_mgr, jp_mgr])
+    db_session.commit()
+
+    # 1. 跨公司指派主管應失敗 (ETJ-TW 部門指派 ETJ-JP 員工)
+    cross_res = client.post(
+        "/api/v1/hr/organizations",
+        json={
+            "id": "ORG-SALES",
+            "company_id": "ETJ-TW",
+            "code": "SALES",
+            "name": "業務部",
+            "manager_id": "emp-jp-mgr",
+        },
+        headers=headers,
+    )
+    assert cross_res.status_code == status.HTTP_400_BAD_REQUEST
+    assert cross_res.json()["error"]["code"] == "MANAGER_NOT_FOUND"
+
+    # 2. 正確建立部門並指定同公司主管
+    create_res = client.post(
+        "/api/v1/hr/organizations",
+        json={
+            "id": "ORG-SALES",
+            "company_id": "ETJ-TW",
+            "code": "SALES",
+            "name": "業務部",
+            "manager_id": "emp-tw-mgr",
+        },
+        headers=headers,
+    )
+    assert create_res.status_code == status.HTTP_201_CREATED
+    data = create_res.json()
+    assert data["manager_id"] == "emp-tw-mgr"
+    assert data["manager_name"] == "陳主管"
+    assert data["manager_no"] == "TW901"
+
+    # 3. 查詢組織列表驗證主管關聯載入
+    list_res = client.get("/api/v1/hr/organizations?company_id=ETJ-TW", headers=headers)
+    assert list_res.status_code == status.HTTP_200_OK
+    sales_org = next((o for o in list_res.json() if o["id"] == "ORG-SALES"), None)
+    assert sales_org is not None
+    assert sales_org["manager_id"] == "emp-tw-mgr"
+    assert sales_org["manager_name"] == "陳主管"
+    assert sales_org["manager_no"] == "TW901"
+
+    # 4. 更新部門主管為空 (清空主管)
+    clear_res = client.put(
+        "/api/v1/hr/organizations/ORG-SALES",
+        json={"manager_id": ""},
+        headers=headers,
+    )
+    assert clear_res.status_code == status.HTTP_200_OK
+    cleared_data = clear_res.json()
+    assert cleared_data["manager_id"] is None
+    assert cleared_data["manager_name"] is None
+    assert cleared_data["manager_no"] is None
+
+
 def test_employee_transfer_and_version_increment(client, hr_env, db_session):
     """
     測試 3：員工調職作業與版本號樂觀鎖

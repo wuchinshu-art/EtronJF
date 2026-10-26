@@ -1,4 +1,5 @@
 import uuid
+from typing import Optional
 from datetime import datetime, date, timezone
 from sqlalchemy import (
     Column,
@@ -100,6 +101,7 @@ class Organization(Base):
     level = Column(String(20), nullable=False, default="DEPARTMENT")  # CHAIRMAN 董事長, CEO 執行長, GM 總經理, CENTER 中心, DIVISION 處, DEPARTMENT 部, SECTION 課, TEAM 組
     effective_date = Column(Date, nullable=True)  # 生效起始日期 (Effective Date)
     expiry_date = Column(Date, nullable=True)  # 失效截止日期 (Expiry Date, None 表示永久有效)
+    manager_id = Column(String(36), ForeignKey("employees.id", ondelete="SET NULL", use_alter=True), nullable=True, index=True)
     is_active = Column(Boolean, default=True, nullable=False)
 
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
@@ -107,7 +109,16 @@ class Organization(Base):
 
     company = relationship("Company", back_populates="organizations")
     parent = relationship("Organization", remote_side=[id], backref="children")
-    employees = relationship("Employee", back_populates="organization")
+    employees = relationship("Employee", back_populates="organization", foreign_keys="Employee.organization_id")
+    manager = relationship("Employee", foreign_keys=[manager_id], post_update=True)
+
+    @property
+    def manager_name(self) -> Optional[str]:
+        return self.manager.full_name if self.manager else None
+
+    @property
+    def manager_no(self) -> Optional[str]:
+        return self.manager.employee_no if self.manager else None
 
     __table_args__ = (
         UniqueConstraint("company_id", "code", name="uq_company_org_code"),
@@ -162,7 +173,7 @@ class Employee(Base):
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
     company = relationship("Company", back_populates="employees")
-    organization = relationship("Organization", back_populates="employees")
+    organization = relationship("Organization", back_populates="employees", foreign_keys=[organization_id])
     person = relationship("Person", back_populates="employments")
     default_shift = relationship("Shift", foreign_keys=[default_shift_id])
     manager_relations = relationship("ManagerRelation", foreign_keys="ManagerRelation.employee_id", back_populates="employee", cascade="all, delete-orphan")

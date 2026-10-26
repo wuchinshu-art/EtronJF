@@ -13,6 +13,9 @@ interface OrgItem {
   name: string;
   parent_id: string | null;
   level: string;
+  manager_id?: string | null;
+  manager_name?: string | null;
+  manager_no?: string | null;
   effective_date: string | null;
   expiry_date: string | null;
   is_active: boolean;
@@ -38,10 +41,29 @@ const formCode = ref('');
 const formName = ref('');
 const formParentId = ref('');
 const formLevel = ref('DEPARTMENT');
+const formManagerId = ref('');
 const formEffectiveDate = ref('');
 const formExpiryDate = ref('');
 const formIsActive = ref(true);
 const errorMessage = ref('');
+
+const companyEmployees = ref<Array<{ id: string; employee_no: string; full_name: string; status?: string }>>([]);
+
+async function fetchCompanyEmployees(companyId: string) {
+  if (!companyId) {
+    companyEmployees.value = [];
+    return;
+  }
+  try {
+    const res = await apiFetch(`/api/v1/hr/employees?company_id=${companyId}`);
+    if (res.ok) {
+      const data = await res.json();
+      companyEmployees.value = data.filter((e: any) => e.status !== 'RESIGNED');
+    }
+  } catch {
+    companyEmployees.value = [];
+  }
+}
 
 const orgLevels = [
   { value: 'TEAM', key: 'team', label: '組 (Team)' },
@@ -109,10 +131,12 @@ function openCreateModal() {
   formName.value = '';
   formParentId.value = '';
   formLevel.value = 'DEPARTMENT';
+  formManagerId.value = '';
   formEffectiveDate.value = new Date().toISOString().split('T')[0];
   formExpiryDate.value = '';
   formIsActive.value = true;
   errorMessage.value = '';
+  fetchCompanyEmployees(formCompanyId.value);
   showModal.value = true;
 }
 
@@ -125,10 +149,12 @@ function openEditModal(org: OrgItem) {
   formName.value = org.name;
   formParentId.value = org.parent_id || '';
   formLevel.value = org.level;
+  formManagerId.value = org.manager_id || '';
   formEffectiveDate.value = org.effective_date || '';
   formExpiryDate.value = org.expiry_date || '';
   formIsActive.value = org.is_active;
   errorMessage.value = '';
+  fetchCompanyEmployees(formCompanyId.value);
   showModal.value = true;
 }
 
@@ -162,6 +188,7 @@ async function saveOrg() {
           name: formName.value,
           parent_id: formParentId.value || null,
           level: formLevel.value,
+          manager_id: formManagerId.value || null,
           effective_date: formEffectiveDate.value || null,
           expiry_date: formExpiryDate.value || null,
           is_active: formIsActive.value,
@@ -178,6 +205,7 @@ async function saveOrg() {
           name: formName.value,
           parent_id: formParentId.value || null,
           level: formLevel.value,
+          manager_id: formManagerId.value || null,
           effective_date: formEffectiveDate.value || null,
           expiry_date: formExpiryDate.value || null,
         }),
@@ -307,6 +335,9 @@ onMounted(async () => {
               {{ t('hr.org.parent') }}: <span class="font-mono font-medium text-slate-700">{{ org.parent_id }}</span>
             </p>
             <p v-else class="text-emerald-600 font-medium">{{ t('hr.org.rootDept') }}</p>
+            <p v-if="org.manager_name">
+              {{ t('hr.org.manager', '部門主管') }}: <span class="font-medium text-slate-800">👤 {{ org.manager_name }}</span> <span v-if="org.manager_no" class="font-mono text-slate-500 text-[10px]">({{ org.manager_no }})</span>
+            </p>
             
             <!-- 有效與失效日期 -->
             <div class="pt-2 mt-2 border-t border-slate-100 flex items-center justify-between text-[10px]">
@@ -340,7 +371,7 @@ onMounted(async () => {
             <select
               v-if="!isEditing"
               v-model="formCompanyId"
-              @change="formParentId = ''"
+              @change="formParentId = ''; fetchCompanyEmployees(formCompanyId); formManagerId = ''"
               class="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white focus:outline-hidden focus:ring-1 focus:ring-(--color-primary)"
             >
               <option
@@ -420,6 +451,23 @@ onMounted(async () => {
               </select>
             </FormField>
           </div>
+
+          <!-- 部門主管 -->
+          <FormField :label="t('hr.org.manager', '部門主管 (Department Manager)')" hint="選填，負責該部門之簽核與管理">
+            <select
+              v-model="formManagerId"
+              class="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white focus:outline-hidden focus:ring-1 focus:ring-(--color-primary)"
+            >
+              <option value="">{{ t('hr.org.noManager', '無 (未指定主管)') }}</option>
+              <option
+                v-for="emp in companyEmployees"
+                :key="emp.id"
+                :value="emp.id"
+              >
+                {{ emp.employee_no }} - {{ emp.full_name }}
+              </option>
+            </select>
+          </FormField>
 
           <!-- 有效日期與失效日期 -->
           <div class="grid grid-cols-2 gap-4">

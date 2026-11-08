@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue';
 import { useTranslation } from 'i18next-vue';
 import { hasPermission } from '../../utils/auth';
+import { forceLogoutUser } from '../../utils/sessions';
 
 const { t } = useTranslation();
 
@@ -433,6 +434,17 @@ async function handleResetPassword() {
     }
   } catch {
     showToast('連線異常', 'error');
+  }
+}
+
+// 強制登出：撤銷該帳號全部有效工作階段
+async function handleForceLogout(user: UserItem) {
+  if (!confirm(t('portal.admin.forceLogoutConfirm', { username: user.username }))) return;
+  try {
+    const res = await forceLogoutUser(user.id);
+    showToast(t('portal.admin.forceLogoutDone', { count: res.revoked_count }));
+  } catch {
+    showToast(t('portal.admin.forceLogoutFailed'), 'error');
   }
 }
 
@@ -972,6 +984,15 @@ onMounted(async () => {
                       title="管理員重設密碼"
                     >
                       🔑
+                    </button>
+                    <button
+                      v-if="u.is_active"
+                      @click="handleForceLogout(u)"
+                      class="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded transition cursor-pointer"
+                      :title="t('portal.admin.forceLogout')"
+                      :aria-label="t('portal.admin.forceLogout')"
+                    >
+                      ⏏️
                     </button>
                     <button
                       @click="toggleUserStatus(u)"

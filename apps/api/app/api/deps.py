@@ -113,6 +113,35 @@ def get_current_user(
     return user
 
 
+def is_admin_user(db: DbSession, user_id: str) -> bool:
+    """是否具備 ADMIN 系統最高管理員角色 (任一公司)"""
+    stmt = select(UserRole.role_id).where(
+        UserRole.user_id == user_id,
+        UserRole.role_id == "ADMIN",
+    ).limit(1)
+    return db.execute(stmt).first() is not None
+
+
+def get_scoped_company_ids(db: DbSession, session: UserSession) -> set[str]:
+    """使用者可操作之公司代碼集合：user_scopes 中的公司 + 目前 session 作用公司"""
+    stmt = select(UserScope.company_id).where(UserScope.user_id == session.user_id)
+    companies = set(db.execute(stmt).scalars().all())
+    companies.add(session.active_company_id)
+    return companies
+
+
+def ensure_company_in_scope(db: DbSession, session: UserSession, company_id: Optional[str]) -> None:
+    """伺服器端公司範圍檢查；ADMIN 不受限。違反時拋出 CROSS_COMPANY_FORBIDDEN"""
+    if is_admin_user(db, session.user_id):
+        return
+    if not company_id or company_id not in get_scoped_company_ids(db, session):
+        raise AppException(
+            code="CROSS_COMPANY_FORBIDDEN",
+            message=f"跨公司存取遭拒：無權存取公司 [{company_id}] 之業務資源",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+
 def require_permissions(*required_permissions: str) -> Callable:
     """權限碼檢查裝飾依賴 (RBAC Permission Dependency)"""
     def permission_checker(
@@ -131,14 +160,7 @@ def require_permissions(*required_permissions: str) -> Callable:
         user_perms = set(db.execute(stmt).scalars().all())
 
         # 平台管理員若有 ADMIN 角色亦視為具備全權限
-        admin_check = (
-            select(UserRole)
-            .where(
-                UserRole.user_id == session.user_id,
-                UserRole.role_id == "ADMIN",
-            )
-        )
-        is_admin = db.execute(admin_check).scalar_one_or_none() is not None
+        is_admin = is_admin_user(db, session.user_id)
 
         if not is_admin:
             for req in required_permissions:
@@ -148,6 +170,35 @@ def require_permissions(*required_permissions: str) -> Callable:
                         message=f"權限不足：缺少必要權限碼 [{req}]",
                         status_code=status.HTTP_403_FORBIDDEN,
                     )
+        return session
+
+    return permission_checker
+
+
+def require_any_permission(*candidate_permissions: str) -> Callable:
+    """權限碼 OR 檢查：具備任一權限碼即可 (ADMIN 視為全權限)"""
+    def permission_checker(
+        session: UserSession = Depends(get_current_session),
+        db: DbSession = Depends(get_db),
+    ) -> UserSession:
+        if is_admin_user(db, session.user_id):
+            return session
+        stmt = (
+            select(RolePermission.permission_code)
+            .join(UserRole, UserRole.role_id == RolePermission.role_id)
+            .where(
+                UserRole.user_id == session.user_id,
+                UserRole.company_id == session.active_company_id,
+                RolePermission.permission_code.in_(candidate_permissions),
+            )
+            .limit(1)
+        )
+        if db.execute(stmt).first() is None:
+            raise AppException(
+                code="PERMISSION_DENIED",
+                message=f"權限不足：需具備下列任一權限碼 {list(candidate_permissions)}",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
         return session
 
     return permission_checker

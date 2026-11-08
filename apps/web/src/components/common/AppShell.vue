@@ -7,8 +7,8 @@ import {
   showLoginModal,
   showChangePasswordModal,
   logout,
-  hasAnyPermission,
 } from '../../utils/auth';
+import { visiblePortalModules } from '../../utils/portal';
 import {
   availableCompanies,
   activeCompanyId,
@@ -25,86 +25,7 @@ const props = withDefaults(
   }
 );
 
-interface NavItem {
-  key: string;
-  icon: string;
-  labelKey: string;
-  permissions?: string[];
-  public?: boolean;
-}
-
-const navItems: NavItem[] = [
-  { key: 'dashboard', icon: '📊', labelKey: 'nav.dashboard', public: true },
-  {
-    key: 'hr',
-    icon: '👥',
-    labelKey: 'nav.hr',
-    permissions: ['hr.employee.manage', 'hr.org.manage', 'hr.shift.manage', 'hr.ledger.manage'],
-  },
-  {
-    key: 'leave',
-    icon: '🌴',
-    labelKey: 'nav.leave',
-    permissions: ['leave.create', 'leave.approve', 'leave.cancel'],
-  },
-  {
-    key: 'attendance',
-    icon: '⏱️',
-    labelKey: 'nav.attendance',
-    permissions: ['attendance.punch', 'attendance.manage'],
-  },
-  {
-    key: 'travel',
-    icon: '✈️',
-    labelKey: 'nav.travel',
-    permissions: ['travel.create', 'travel.approve', 'travel.settle', 'travel.finance'],
-  },
-  {
-    key: 'expense',
-    icon: '🧾',
-    labelKey: 'nav.expense',
-    permissions: ['expense.create', 'expense.approve'],
-  },
-  {
-    key: 'seal',
-    icon: '🔏',
-    labelKey: 'nav.seal',
-    permissions: ['seal.request', 'seal.approve', 'seal.execute', 'seal.master'],
-  },
-  {
-    key: 'payment',
-    icon: '💵',
-    labelKey: 'nav.payment',
-    permissions: ['payment.create', 'payment.approve', 'payment.finance', 'vendor.manage'],
-  },
-  {
-    key: 'contract',
-    icon: '📜',
-    labelKey: 'nav.contract',
-    permissions: ['contract.create', 'contract.approve', 'contract.archive'],
-  },
-  {
-    key: 'users',
-    icon: '🛡️',
-    labelKey: 'nav.users',
-    permissions: ['system.user.manage', 'system.role.manage'],
-  },
-];
-
-const visibleNavItems = computed(() => {
-  return navItems.filter((item) => {
-    if (!currentUser.value) {
-      return !!item.public;
-    }
-    if (currentUser.value.roles?.includes('ADMIN')) {
-      return true;
-    }
-    if (!item.permissions || item.permissions.length === 0) {
-      return true;
-    }
-    return hasAnyPermission(item.permissions);
-  });
-});
+const visibleNavItems = computed(() => visiblePortalModules());
 
 const { t, i18next } = useTranslation();
 
@@ -169,6 +90,12 @@ function selectModule(mod: string) {
 async function handleLogout() {
   isUserMenuOpen.value = false;
   await logout();
+}
+
+function openMySessions() {
+  isUserMenuOpen.value = false;
+  // Portal 首頁含「登入裝置管理」面板
+  emit('select-module', 'dashboard');
 }
 
 function openChangePassword() {
@@ -295,6 +222,14 @@ function openChangePassword() {
                     </span>
                   </div>
                 </div>
+
+                <button
+                  @click="openMySessions"
+                  class="w-full text-left px-3.5 py-2 hover:bg-slate-50 flex items-center space-x-2 text-slate-700 cursor-pointer"
+                >
+                  <span>💻</span>
+                  <span>{{ t('portal.mySessions') }}</span>
+                </button>
 
                 <button
                   @click="openChangePassword"

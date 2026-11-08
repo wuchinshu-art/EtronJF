@@ -18,6 +18,7 @@ from app.core.errors import AppException
 from app.models.auth import User, Session as UserSession, UserRole, UserScope, RolePermission
 from app.models.hr import Employee, ManagerRelation, Organization
 from app.api.deps import get_current_session, get_current_user
+from app.core.session_service import list_active_sessions, serialize_session, revoke_sessions
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -289,6 +290,57 @@ def change_password(
     user.hashed_password = hash_password(req.new_password)
     user.updated_at = utc_now()
     user.version += 1
+    # 變更密碼後撤銷其他裝置之工作階段，保留目前 session
+    revoked = revoke_sessions(db, user.id, utc_now(), exclude_session_id=session.id)
     db.commit()
 
-    return {"status": "success", "message": "密碼變更成功"}
+    return {"status": "success", "message": "密碼變更成功", "revoked_other_sessions": revoked}
+
+
+# ==========================================
+# 我的工作階段 (Self-service Session Management)
+# ==========================================
+@router.get("/sessions", status_code=status.HTTP_200_OK)
+def list_my_sessions(
+    session: UserSession = Depends(get_current_session),
+    db: DbSession = Depends(get_db),
+):
+    """查詢本人目前有效之工作階段 (標示目前所用 session)"""
+    return [serialize_session(s, session.id) for s in list_active_sessions(db, session.user_id, utc_now())]
+
+
+@router.post("/sessions/revoke-others", status_code=status.HTTP_200_OK)
+def revoke_my_other_sessions(
+    session: UserSession = Depends(get_current_session),
+    db: DbSession = Depends(get_db),
+):
+    """登出其他所有裝置 (保留目前 session)"""
+    count = revoke_sessions(db, session.user_id, utc_now(), exclude_session_id=session.id)
+    db.commit()
+    return {"status": "success", "revoked_count": count}
+
+
+@router.post("/sessions/{session_id}/revoke", status_code=status.HTTP_200_OK)
+def revoke_my_session(
+    session_id: str,
+    response: Response,
+    session: UserSession = Depends(get_current_session),
+    db: DbSession = Depends(get_db),
+):
+    """撤銷本人指定工作階段；僅能撤銷自己的 session (他人 session 一律回 404 不洩漏存在與否)"""
+    target = db.get(UserSession, session_id)
+    if not target or target.user_id != session.user_id:
+        raise AppException(
+            code="SESSION_NOT_FOUND",
+            message="找不到指定的工作階段",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    if not target.is_revoked:
+        target.is_revoked = True
+        target.revoked_at = utc_now()
+        db.commit()
+
+    is_current = target.id == session.id
+    if is_current:
+        response.delete_cookie(key=settings.SESSION_COOKIE_NAME, path="/")
+    return {"status": "success", "is_current": is_current}

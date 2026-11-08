@@ -203,6 +203,11 @@ def test_assign_user_roles_payload_compatibility(client, seed_auth_data, db_sess
     """驗證使用者角色分配 API 之容錯與相容性：支援標準 role_ids、相容 role_names 以及自動補足生效公司"""
     u = seed_auth_data["user_tw"]
 
+    # 角色指派需 system.user.manage；授予 ADMIN 角色另需操作者本身為 ADMIN (防權限提升)
+    # (置於 ETJ-JP，使步驟 1 覆寫 ETJ-TW 角色後操作者仍保有 ADMIN)
+    db_session.add(UserRole(user_id=u.id, role_id="ADMIN", company_id="ETJ-JP"))
+    db_session.commit()
+
     # 先登入取得 CSRF token 與工作階段 cookie
     login_res = client.post(
         "/api/v1/auth/login",

@@ -3,7 +3,8 @@ from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, status, Query
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session as DbSession
-from sqlalchemy import select, update, func, or_
+from sqlalchemy import select, func, or_
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from app.core.database import get_db
 from app.core.security import hash_password
@@ -18,13 +19,44 @@ from app.models.auth import (
     RolePermission,
 )
 from app.models.hr import Employee, Company
-from app.api.deps import get_current_user, get_current_session, require_permissions
+from app.api.deps import (
+    get_current_session,
+    require_permissions,
+    require_any_permission,
+    is_admin_user,
+    get_scoped_company_ids,
+    ensure_company_in_scope,
+)
+from app.core.session_service import list_active_sessions, serialize_session, revoke_sessions
 
 router = APIRouter(prefix="/users", tags=["Users & RBAC"])
 
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+USER_MANAGE = "system.user.manage"
+ROLE_MANAGE = "system.role.manage"
+
+
+def _get_managed_user(db: DbSession, session: UserSession, user_id: str) -> User:
+    """取得目標帳號並驗證操作者對其所屬公司具備管理範圍 (防跨公司 IDOR)"""
+    target = db.get(User, user_id)
+    if not target:
+        raise AppException(code="USER_NOT_FOUND", message=f"找不到指定使用者 [{user_id}]", status_code=404)
+    ensure_company_in_scope(db, session, target.primary_company_id)
+    return target
+
+
+def _ensure_can_grant_roles(db: DbSession, session: UserSession, role_ids) -> None:
+    """非 ADMIN 不得授予 ADMIN 角色 (防權限提升)"""
+    if "ADMIN" in set(role_ids or []) and not is_admin_user(db, session.user_id):
+        raise AppException(
+            code="ROLE_GRANT_FORBIDDEN",
+            message="僅系統最高管理員可授予 ADMIN 角色",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
 
 
 # ==========================================
@@ -121,51 +153,46 @@ DEFAULT_ROLES = [
 
 
 def ensure_seed_permissions_and_roles(db: DbSession):
-    """確保系統全量標準權限碼與預設內建角色已入庫"""
-    # 1. 確保 Permissions
-    existing_perms = {p.code: p for p in db.execute(select(Permission)).scalars().all()}
-    for item in ALL_SYSTEM_PERMISSIONS:
-        if item["code"] not in existing_perms:
-            p = Permission(
-                code=item["code"],
-                name=item["name"],
-                module=item["module"],
-                description=item["description"],
-            )
-            db.add(p)
-            existing_perms[item["code"]] = p
-    db.commit()
+    """確保系統全量標準權限碼與預設內建角色已入庫 (冪等)。
 
-    # 2. 確保 Roles 與關聯 RolePermission
+    首次載入時前端會並行呼叫多個端點，可能同時插入同一筆內建角色／權限；
+    以 INSERT ... ON CONFLICT DO NOTHING 寫入，並行請求不會因唯一鍵衝突回 500。
+    僅新增缺漏資料，不覆寫管理員已調整之角色名稱或權限。
+    """
+    perm_rows = [
+        {"code": i["code"], "name": i["name"], "module": i["module"], "description": i["description"]}
+        for i in ALL_SYSTEM_PERMISSIONS
+    ]
+    db.execute(sqlite_insert(Permission).values(perm_rows).on_conflict_do_nothing(index_elements=["code"]))
+
+    existing_roles = set(db.execute(select(Role.id)).scalars().all())
+    role_rows = [
+        {"id": r["id"], "name": r["name"], "description": r["description"]}
+        for r in DEFAULT_ROLES
+        if r["id"] not in existing_roles
+    ]
+    if role_rows:
+        db.execute(sqlite_insert(Role).values(role_rows).on_conflict_do_nothing(index_elements=["id"]))
+
+    all_codes = set(db.execute(select(Permission.code)).scalars().all())
+    rp_rows = []
+    # 只為本次新建的內建角色補預設權限，避免把管理員移除的權限又加回
     for r_def in DEFAULT_ROLES:
-        role = db.get(Role, r_def["id"])
-        if not role:
-            role = Role(
-                id=r_def["id"],
-                name=r_def["name"],
-                description=r_def["description"],
-            )
-            db.add(role)
-            db.commit()
-
-        # 分配權限
-        current_assigned = set(
-            db.execute(select(RolePermission.permission_code).where(RolePermission.role_id == role.id)).scalars().all()
-        )
-
-        target_codes = set()
+        if r_def["id"] in existing_roles:
+            continue
         if r_def.get("all_perms"):
-            target_codes = set(existing_perms.keys())
+            target_codes = set(all_codes)
         elif "perm_prefixes" in r_def:
-            for code in existing_perms.keys():
-                if any(code.startswith(pref) for pref in r_def["perm_prefixes"]):
-                    target_codes.add(code)
-        elif "perms" in r_def:
-            target_codes = set(r_def["perms"])
-
-        for t_code in target_codes:
-            if t_code not in current_assigned and t_code in existing_perms:
-                db.add(RolePermission(role_id=role.id, permission_code=t_code))
+            target_codes = {c for c in all_codes if any(c.startswith(p) for p in r_def["perm_prefixes"])}
+        else:
+            target_codes = set(r_def.get("perms", [])) & all_codes
+        rp_rows += [{"role_id": r_def["id"], "permission_code": c} for c in sorted(target_codes)]
+    if rp_rows:
+        db.execute(
+            sqlite_insert(RolePermission)
+            .values(rp_rows)
+            .on_conflict_do_nothing(index_elements=["role_id", "permission_code"])
+        )
     db.commit()
 
 
@@ -227,6 +254,7 @@ def list_users(
     company_id: Optional[str] = Query(None, description="公司代碼過濾"),
     keyword: Optional[str] = Query(None, description="使用者名稱/姓名/Email 搜尋關鍵字"),
     is_active: Optional[bool] = Query(None, description="啟用狀態過濾"),
+    session: UserSession = Depends(require_permissions(USER_MANAGE)),
     db: DbSession = Depends(get_db),
 ):
     """
@@ -238,7 +266,10 @@ def list_users(
 
     stmt = select(User)
     if company_id:
+        ensure_company_in_scope(db, session, company_id)
         stmt = stmt.where(User.primary_company_id == company_id)
+    elif not is_admin_user(db, session.user_id):
+        stmt = stmt.where(User.primary_company_id.in_(get_scoped_company_ids(db, session)))
     if is_active is not None:
         stmt = stmt.where(User.is_active == is_active)
     if keyword:
@@ -306,7 +337,7 @@ def list_users(
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_user(
     req: CreateUserRequest,
-    current_user: Optional[User] = Depends(get_current_user),
+    session: UserSession = Depends(require_permissions(USER_MANAGE)),
     db: DbSession = Depends(get_db),
 ):
     """新增系統帳號 (支援自訂密碼、主公司與初始角色指派)"""
@@ -324,7 +355,9 @@ def create_user(
             status_code=status.HTTP_409_CONFLICT,
         )
 
-    comp_id = req.primary_company_id or req.active_company_id or "ETJ-TW"
+    comp_id = req.primary_company_id or req.active_company_id or session.active_company_id
+    ensure_company_in_scope(db, session, comp_id)
+    _ensure_can_grant_roles(db, session, req.role_ids or req.roles)
 
     new_user = User(
         username=req.username,
@@ -387,12 +420,11 @@ def create_user(
 @router.get("/{user_id}", status_code=status.HTTP_200_OK)
 def get_user_detail(
     user_id: str,
+    session: UserSession = Depends(require_permissions(USER_MANAGE)),
     db: DbSession = Depends(get_db),
 ):
     """查詢單一使用者帳號詳情"""
-    u = db.get(User, user_id)
-    if not u:
-        raise AppException(code="USER_NOT_FOUND", message=f"找不到指定使用者 [{user_id}]", status_code=404)
+    u = _get_managed_user(db, session, user_id)
 
     roles_stmt = (
         select(UserRole.role_id, UserRole.company_id, Role.name)
@@ -439,13 +471,11 @@ def get_user_detail(
 def update_user(
     user_id: str,
     req: UpdateUserRequest,
-    current_user: Optional[User] = Depends(get_current_user),
+    session: UserSession = Depends(require_permissions(USER_MANAGE)),
     db: DbSession = Depends(get_db),
 ):
     """更新使用者基本資料 (姓名、Email、主公司、綁定員工或啟用狀態)"""
-    u = db.get(User, user_id)
-    if not u:
-        raise AppException(code="USER_NOT_FOUND", message=f"找不到指定使用者 [{user_id}]", status_code=404)
+    u = _get_managed_user(db, session, user_id)
 
     if req.display_name is not None:
         u.display_name = req.display_name
@@ -453,11 +483,16 @@ def update_user(
         u.email = req.email
     new_comp = req.primary_company_id or req.active_company_id
     if new_comp is not None:
+        ensure_company_in_scope(db, session, new_comp)
         u.primary_company_id = new_comp
     if req.employee_id is not None:
         u.employee_id = req.employee_id if req.employee_id else None
     if req.is_active is not None:
+        if req.is_active is False and u.id == session.user_id:
+            raise AppException(code="SELF_SUSPEND_FORBIDDEN", message="不可停用自己的帳號", status_code=400)
         u.is_active = req.is_active
+        if req.is_active is False:
+            revoke_sessions(db, u.id, utc_now())
 
     u.updated_at = utc_now()
     u.version += 1
@@ -470,13 +505,11 @@ def update_user(
 @router.post("/{user_id}/activate", status_code=status.HTTP_200_OK)
 def activate_user(
     user_id: str,
-    current_user: Optional[User] = Depends(get_current_user),
+    session: UserSession = Depends(require_permissions(USER_MANAGE)),
     db: DbSession = Depends(get_db),
 ):
     """重新啟用使用者帳號"""
-    u = db.get(User, user_id)
-    if not u:
-        raise AppException(code="USER_NOT_FOUND", message=f"找不到指定使用者 [{user_id}]", status_code=404)
+    u = _get_managed_user(db, session, user_id)
 
     u.is_active = True
     u.updated_at = utc_now()
@@ -489,7 +522,7 @@ def activate_user(
 @router.post("/{user_id}/suspend", status_code=status.HTTP_200_OK)
 def suspend_user(
     user_id: str,
-    current_user: Optional[User] = Depends(get_current_user),
+    session: UserSession = Depends(require_permissions(USER_MANAGE)),
     db: DbSession = Depends(get_db),
 ):
     """
@@ -497,25 +530,16 @@ def suspend_user(
     1. 標記 user.is_active = False
     2. 立即撤銷 (Revoke) 該使用者所有作用中的 Session！
     """
-    target = db.get(User, user_id)
-    if not target:
-        raise AppException(
-            code="USER_NOT_FOUND",
-            message="找不到指定的使用者",
-            status_code=status.HTTP_404_NOT_FOUND,
-        )
+    target = _get_managed_user(db, session, user_id)
+    if target.id == session.user_id:
+        raise AppException(code="SELF_SUSPEND_FORBIDDEN", message="不可停用自己的帳號", status_code=400)
 
     target.is_active = False
     target.updated_at = utc_now()
     target.version += 1
 
     # 立即撤銷該使用者之全部 Sessions
-    now = utc_now()
-    db.execute(
-        update(UserSession)
-        .where(UserSession.user_id == user_id, UserSession.is_revoked == False)
-        .values(is_revoked=True, revoked_at=now)
-    )
+    revoke_sessions(db, user_id, utc_now())
     db.commit()
 
     return {"status": "success", "message": f"使用者 [{target.username}] 已停用，所有有效工作階段已即時撤銷"}
@@ -525,13 +549,11 @@ def suspend_user(
 def reset_user_password(
     user_id: str,
     req: ResetPasswordRequest,
-    current_user: Optional[User] = Depends(get_current_user),
+    session: UserSession = Depends(require_permissions(USER_MANAGE)),
     db: DbSession = Depends(get_db),
 ):
     """管理者強制重設使用者密碼 (下次登入將被要求強制變更密碼)"""
-    u = db.get(User, user_id)
-    if not u:
-        raise AppException(code="USER_NOT_FOUND", message=f"找不到指定使用者 [{user_id}]", status_code=404)
+    u = _get_managed_user(db, session, user_id)
 
     u.hashed_password = hash_password(req.new_password)
     u.is_first_login = True  # 標記為首次登入要求修改密碼
@@ -539,12 +561,7 @@ def reset_user_password(
     u.version += 1
 
     # 撤銷舊 session
-    now = utc_now()
-    db.execute(
-        update(UserSession)
-        .where(UserSession.user_id == user_id, UserSession.is_revoked == False)
-        .values(is_revoked=True, revoked_at=now)
-    )
+    revoke_sessions(db, user_id, utc_now())
     db.commit()
 
     return {"status": "success", "message": f"帳號 [{u.username}] 密碼已重設，下次登入將要求強制變更密碼"}
@@ -554,16 +571,16 @@ def reset_user_password(
 def assign_user_roles(
     user_id: str,
     req: AssignRolesRequest,
-    current_user: Optional[User] = Depends(get_current_user),
+    session: UserSession = Depends(require_permissions(USER_MANAGE)),
     db: DbSession = Depends(get_db),
 ):
     """更新指定使用者在特定公司生效之角色清單"""
-    u = db.get(User, user_id)
-    if not u:
-        raise AppException(code="USER_NOT_FOUND", message=f"找不到指定使用者 [{user_id}]", status_code=404)
+    u = _get_managed_user(db, session, user_id)
 
-    target_company = req.company_id or u.primary_company_id or "ETJ-TW"
+    target_company = req.company_id or u.primary_company_id
+    ensure_company_in_scope(db, session, target_company)
     target_roles = req.role_ids if req.role_ids is not None else (req.role_names if req.role_names is not None else [])
+    _ensure_can_grant_roles(db, session, target_roles)
 
     # 清除該使用者在該公司的現有角色
     existing_roles = db.execute(
@@ -600,6 +617,7 @@ def assign_user_roles(
 # ==========================================
 @router.get("/meta/permissions", status_code=status.HTTP_200_OK)
 def list_system_permissions(
+    session: UserSession = Depends(require_any_permission(USER_MANAGE, ROLE_MANAGE)),
     db: DbSession = Depends(get_db),
 ):
     """取得系統全量權限定義清單 (依模組 Module 分組)"""
@@ -643,6 +661,7 @@ def list_system_permissions(
 
 @router.get("/meta/roles", status_code=status.HTTP_200_OK)
 def list_roles_with_permissions(
+    session: UserSession = Depends(require_any_permission(USER_MANAGE, ROLE_MANAGE)),
     db: DbSession = Depends(get_db),
 ):
     """查詢所有角色、使用者人數與各角色被賦予之權限代碼清單"""
@@ -681,7 +700,7 @@ def list_roles_with_permissions(
 @router.post("/meta/roles", status_code=status.HTTP_201_CREATED)
 def create_role(
     req: RoleCreateRequest,
-    current_user: Optional[User] = Depends(get_current_user),
+    session: UserSession = Depends(require_permissions(ROLE_MANAGE)),
     db: DbSession = Depends(get_db),
 ):
     """新增自訂角色"""
@@ -710,6 +729,7 @@ def create_role(
 @router.get("/meta/roles/{role_id}/permissions", status_code=status.HTTP_200_OK)
 def get_role_permissions(
     role_id: str,
+    session: UserSession = Depends(require_any_permission(USER_MANAGE, ROLE_MANAGE)),
     db: DbSession = Depends(get_db),
 ):
     """取得特定角色之所有授權權限代碼清單"""
@@ -728,7 +748,7 @@ def get_role_permissions(
 def update_role(
     role_id: str,
     req: RoleUpdateRequest,
-    current_user: Optional[User] = Depends(get_current_user),
+    session: UserSession = Depends(require_permissions(ROLE_MANAGE)),
     db: DbSession = Depends(get_db),
 ):
     """更新角色基本資料 (名稱與說明)"""
@@ -749,10 +769,12 @@ def update_role(
 def update_role_permissions(
     role_id: str,
     req: RolePermissionsUpdateRequest,
-    current_user: Optional[User] = Depends(get_current_user),
+    session: UserSession = Depends(require_permissions(ROLE_MANAGE)),
     db: DbSession = Depends(get_db),
 ):
     """調整指定角色的 RBAC 權限指派清單 (權限矩陣更新)"""
+    if role_id == "ADMIN" and not is_admin_user(db, session.user_id):
+        raise AppException(code="ROLE_GRANT_FORBIDDEN", message="僅系統最高管理員可調整 ADMIN 角色", status_code=403)
     role = db.get(Role, role_id)
     if not role:
         raise AppException(code="ROLE_NOT_FOUND", message=f"找不到角色 [{role_id}]", status_code=404)
@@ -775,7 +797,7 @@ def update_role_permissions(
 @router.delete("/meta/roles/{role_id}", status_code=status.HTTP_200_OK)
 def delete_role(
     role_id: str,
-    current_user: Optional[User] = Depends(get_current_user),
+    session: UserSession = Depends(require_permissions(ROLE_MANAGE)),
     db: DbSession = Depends(get_db),
 ):
     """刪除自訂角色 (內建保護角色拒絕刪除)"""
@@ -794,6 +816,33 @@ def delete_role(
     db.delete(role)
     db.commit()
     return {"status": "success", "message": f"角色 [{role.name}] 已刪除"}
+
+
+# ==========================================
+# 帳號工作階段查詢及撤銷 (Admin Session Management)
+# ==========================================
+@router.get("/{user_id}/sessions", status_code=status.HTTP_200_OK)
+def list_user_sessions(
+    user_id: str,
+    session: UserSession = Depends(require_permissions(USER_MANAGE)),
+    db: DbSession = Depends(get_db),
+):
+    """查詢指定帳號目前有效之工作階段"""
+    target = _get_managed_user(db, session, user_id)
+    return [serialize_session(s, session.id) for s in list_active_sessions(db, target.id, utc_now())]
+
+
+@router.post("/{user_id}/sessions/revoke", status_code=status.HTTP_200_OK)
+def revoke_user_sessions(
+    user_id: str,
+    session: UserSession = Depends(require_permissions(USER_MANAGE)),
+    db: DbSession = Depends(get_db),
+):
+    """強制登出：撤銷指定帳號全部有效工作階段 (不含操作者本身目前 session)"""
+    target = _get_managed_user(db, session, user_id)
+    count = revoke_sessions(db, target.id, utc_now(), exclude_session_id=session.id)
+    db.commit()
+    return {"status": "success", "revoked_count": count}
 
 
 # ==========================================

@@ -17,3 +17,18 @@ API 使用 Router → Service → Repository，交易邊界由 service 控制；
 出勤：import_profiles, import_batches, import_rows, attendance_events, attendance_corrections, attendance_daily_summaries。
 所有業務表有 company_id、建立／更新者與時間；需並行更新者有 version；索引依查詢與唯一規則設計。日期、時間、金額採明確型別及一致序列化。金額 API 用 decimal 字串，後端 Decimal；DB 採幣別最小單位整數，不用 float／SQLite REAL 存財務額。金額與 currency、scale、原幣、換算幣、匯率、匯率日期一併記錄。合約金額未定不可當成 0 跳過門檻。
 
+
+## Portal 帳號管理 API 契約（工作階段查詢及撤銷、伺服器端授權）
+本人（僅需有效 session；寫入需 X-CSRF-Token）：
+- GET  /api/v1/auth/sessions：本人有效 session 清單，欄位 id、active_company_id、ip_address、user_agent(≤200字)、created_at、last_accessed_at、expires_at、idle_expires_at（UTC ISO-8601，Z 結尾）、is_current。不回傳 token hash 與 CSRF token。
+- POST /api/v1/auth/sessions/{id}/revoke：撤銷本人 session；他人 session 一律 404 SESSION_NOT_FOUND；撤銷目前 session 時清除 cookie。
+- POST /api/v1/auth/sessions/revoke-others：保留目前 session，撤銷其餘，回 revoked_count。
+- POST /api/v1/auth/change-password：成功後撤銷其他 session，回 revoked_other_sessions。
+
+管理員：
+- /api/v1/users 全部帳號端點需 system.user.manage；角色寫入端點需 system.role.manage；角色／權限查詢需兩者任一。
+- 公司範圍：非 ADMIN 僅能管理 primary_company_id 位於本人 user_scopes 或目前 session 公司的帳號，違反回 403 CROSS_COMPANY_FORBIDDEN；清單自動依範圍過濾。
+- 授予 ADMIN 角色或修改 ADMIN 角色權限僅限 ADMIN（403 ROLE_GRANT_FORBIDDEN）；不可停用自己（400 SELF_SUSPEND_FORBIDDEN）；以 is_active=false 停用時同步撤銷 session。
+- GET  /api/v1/users/{id}/sessions：查詢該帳號有效 session。
+- POST /api/v1/users/{id}/sessions/revoke：強制登出該帳號全部 session（不含操作者目前 session）。
+- 內建角色補種為冪等（INSERT ... ON CONFLICT DO NOTHING），僅建立缺漏角色時賦予預設權限，不回補管理員已移除的權限。

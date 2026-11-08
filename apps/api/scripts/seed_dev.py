@@ -55,6 +55,11 @@ def seed_database():
             role_hr = Role(id="HR_ADMIN", name="人事主管")
             db.add(role_hr)
 
+        role_admin = db.get(Role, "ADMIN")
+        if not role_admin:
+            role_admin = Role(id="ADMIN", name="系統最高管理員")
+            db.add(role_admin)
+
         role_user = db.get(Role, "GENERAL_USER")
         if not role_user:
             role_user = Role(id="GENERAL_USER", name="一般同仁")
@@ -93,7 +98,7 @@ def seed_database():
                 "display_name": "系統管理員",
                 "company_id": "ETJ-TW",
                 "is_first_login": False,
-                "role_id": "HR_ADMIN",
+                "role_id": "ADMIN",
             },
             {
                 "username": "new_employee",
